@@ -1,3 +1,15 @@
+// Copyright 2020 Baidu, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
+// except in compliance with the License. You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the
+// License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND,
+// either express or implied. See the License for the specific language governing permissions
+// and limitations under the License.
+
 package endpoints
 
 import (
@@ -10,18 +22,17 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
 
 const (
 	MinEndpointLength        = 3
-	MinActionEndpointNum     = 1
-	DefaultKeepAliveInterval = 5
+	DefaultKeepAliveInterval = 60
 	ProbeRequestTimeOut      = 30 * time.Second
-	probeKey = "lbsdkprobeblacklistbucket20200320/lbsdkprobeblacklistkey20200320"
+	probeKey                 = "lbsdkprobeblacklistbucket20200320/lbsdkprobeblacklistkey20200320"
 )
 
 var (
@@ -47,18 +58,18 @@ type RgwInfo struct {
 	// Metadata about each object returned.
 	RgwConfiguration []*Rgw `xml:"Rgw"`
 
-	epoch  int
+	epoch int
 }
 
 // save the info of one endpoint
 type SingleEndpoint struct {
+	IsInBlackList bool
 	Id            uint64
 	Protocol      string
 	Host          string
 	Port          string
 	HostAndPort   string
 	URL           string
-	IsInBlackList bool
 	next          *SingleEndpoint
 	pre           *SingleEndpoint
 }
@@ -67,13 +78,14 @@ type SingleEndpoint struct {
 type EndpointCollection struct {
 	numOfActiveEndpoint int
 	lastEpoch           int
-	validMinEndpointId  uint64
 	keepAliveInterval   int
+	validMinEndpointId  uint64
 	endpointHead        *SingleEndpoint
 	endpointSeed        *[]SingleEndpoint
 	blackList           map[string]*SingleEndpoint
 	httpClient          *http.Client
 	mutex               sync.Mutex
+	notify              chan bool
 }
 
 // manage all endpoint collections
@@ -92,10 +104,11 @@ func NewEndpointCollection(endpointsPath string, keepAliveInterval int) (
 	}
 	httpClient := NewHttpClient()
 	endpoints := &EndpointCollection{
-		lastEpoch:             -1,
+		lastEpoch:         -1,
 		keepAliveInterval: keepAliveInterval,
 		httpClient:        httpClient,
 		blackList:         make(map[string]*SingleEndpoint),
+		notify:            make(chan bool),
 	}
 	if err := endpoints.ReadEndpointsFromFile(endpointsPath, true); err != nil {
 		return nil, err
@@ -107,7 +120,7 @@ func NewEndpointCollection(endpointsPath string, keepAliveInterval int) (
 
 // Update the head of EndpointCollection
 func (e *EndpointCollection) UpdateWholeEndpoitCollection(head *SingleEndpoint, endpointNum,
-		epoch int) error {
+	epoch int) error {
 
 	if head == nil || endpointNum == 0 {
 		return fmt.Errorf("endpoint list is empty")
@@ -122,7 +135,7 @@ func (e *EndpointCollection) UpdateWholeEndpoitCollection(head *SingleEndpoint, 
 	e.numOfActiveEndpoint = endpointNum
 	// set id
 	newValidMinEndpointId := e.validMinEndpointId + 1
-	for i :=0; i < endpointNum; i++ {
+	for i := 0; i < endpointNum; i++ {
 		head.Id = newValidMinEndpointId
 		head = head.next
 	}
@@ -133,8 +146,6 @@ func (e *EndpointCollection) UpdateWholeEndpoitCollection(head *SingleEndpoint, 
 	for k := range e.blackList {
 		delete(e.blackList, k)
 	}
-
-	fmt.Println("UpdateWholeEndpoitCollection: num", endpointNum, "minValidId", newValidMinEndpointId)
 
 	return nil
 }
@@ -198,7 +209,7 @@ func (e *EndpointCollection) isInActiveEndpoints(endpoint *SingleEndpoint) bool 
 
 	if e.endpointHead.URL == endpoint.URL {
 		return true
-	} 
+	}
 
 	head := e.endpointHead.next
 	for head != endpoint {
@@ -230,8 +241,7 @@ func (e *EndpointCollection) insertToEndpointHead(endpoint *SingleEndpoint) bool
 	endpoint.pre = nil
 	endpoint.Id = e.validMinEndpointId
 	e.endpointHead = insertEndpointToHead(endpoint, e.endpointHead)
-	e.numOfActiveEndpoint ++
-	fmt.Println("insertEndpointToHead:", endpoint.URL)
+	e.numOfActiveEndpoint++
 	return true
 }
 
@@ -240,15 +250,14 @@ func (e *EndpointCollection) AddEndpointToBlacklist(endpoint *SingleEndpoint) *S
 	defer e.mutex.Unlock()
 
 	if endpoint == nil || endpoint.IsInBlackList {
-		fmt.Println("AddEndpointToBlacklist 1", endpoint.URL)
 		return e.GetRandEndpoint(0)
 	}
 
-	fmt.Println("AddEndpointToBlacklist 3", endpoint.URL)
 	e.numOfActiveEndpoint--
 	if e.numOfActiveEndpoint <= 0 {
 		e.numOfActiveEndpoint = 0
 		e.endpointHead = nil
+		e.notify <- true
 	} else {
 		endpoint.next.pre = endpoint.pre
 		endpoint.pre.next = endpoint.next
@@ -262,7 +271,6 @@ func (e *EndpointCollection) AddEndpointToBlacklist(endpoint *SingleEndpoint) *S
 	endpoint.IsInBlackList = true
 
 	if endpoint.Id >= e.validMinEndpointId {
-		fmt.Println("add to blacklist", endpoint.URL)
 		e.blackList[endpoint.URL] = endpoint
 	}
 	return e.GetRandEndpoint(0)
@@ -273,15 +281,12 @@ func (e *EndpointCollection) RmEndpointFromBlacklist(host string) bool {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	fmt.Println("RmEndpointFromBlacklist:", host)
 	endpoint, ok := e.blackList[host]
 	if !ok {
-		fmt.Println("RmEndpointFromBlacklist 1:", host)
 		return false
 	}
 
 	if !endpoint.IsInBlackList {
-		fmt.Println("RmEndpointFromBlacklist 2:", endpoint.URL)
 		return false
 	}
 
@@ -289,12 +294,10 @@ func (e *EndpointCollection) RmEndpointFromBlacklist(host string) bool {
 	endpoint.IsInBlackList = false
 
 	if endpoint.Id >= e.validMinEndpointId {
-		fmt.Println("RmEndpointFromBlacklist 3:", endpoint.URL)
 		e.endpointHead = insertEndpointToHead(endpoint, e.endpointHead)
 		e.numOfActiveEndpoint++
 		return true
 	}
-	fmt.Println("RmEndpointFromBlacklist 4:", endpoint.Id, e.validMinEndpointId)
 	return false
 }
 
@@ -359,35 +362,27 @@ func (e *EndpointCollection) probeEndpoint(URL string) bool {
 	if err != nil {
 		return false
 	}
-	fmt.Println("probe Endpoint", URL)
 	httpRequest.Method = http.MethodGet
 	e.httpClient.Timeout = ProbeRequestTimeOut
 
 	// send probe to endpoint
 	httpResponse, err := e.httpClient.Do(httpRequest)
 	if err != nil {
-		fmt.Println("probeEndpoint1", err)
 		return false
 	} else if httpResponse == nil {
-		fmt.Println("probeEndpoint2 response is empty")
 		return false
 	}
 
 	defer httpResponse.Body.Close()
+	io.Copy(ioutil.Discard, httpResponse.Body)
 	if httpResponse.StatusCode == 200 || httpResponse.StatusCode == 404 ||
 		httpResponse.StatusCode == 403 {
-		//message, _ := ioutil.ReadAll(httpResponse.Body)
-		io.Copy(ioutil.Discard, httpResponse.Body)
 		return true
-	} else {
-		message, _ := ioutil.ReadAll(httpResponse.Body)
-		//io.Copy(ioutil.Discard, httpResponse.Body)
-		fmt.Println("probeEndpoint4", string(message))
-		return false
 	}
+	return false
 }
 
-func (e *EndpointCollection) probeBlacklist() {
+func (e *EndpointCollection) probeBlacklist() bool {
 	blacklists := make([]string, 0, len(e.blackList))
 	dellists := make([]string, 0, len(e.blackList))
 
@@ -407,15 +402,18 @@ func (e *EndpointCollection) probeBlacklist() {
 		e.mutex.Unlock()
 	}
 
+	success := false
 	for _, key := range blacklists {
 		if ok := e.probeEndpoint(key); ok {
 			e.RmEndpointFromBlacklist(key)
+			success = true
 		}
 	}
+
+	return success
 }
 
 func (e *EndpointCollection) probeEndpointFromSeed() bool {
-	fmt.Println("probeEndpointFromSeed")
 	if e.endpointSeed == nil {
 		return false
 	}
@@ -447,10 +445,8 @@ func (e *EndpointCollection) getRgwInfoFromServer(endpoint *SingleEndpoint) (*Rg
 	// send http request to endpoint
 	httpResponse, err := e.httpClient.Do(httpRequest)
 	if err != nil {
-		fmt.Println("probeEndpoint1", err)
 		return nil, err
 	} else if httpResponse == nil {
-		fmt.Println("probeEndpoint2 response is empty")
 		return nil, fmt.Errorf("response is empty!")
 	}
 
@@ -476,13 +472,13 @@ func (e *EndpointCollection) getRgwInfoFromServer(endpoint *SingleEndpoint) (*Rg
 	body, err := ioutil.ReadAll(httpResponse.Body)
 	if err != nil {
 		return nil, err
-	} 
+	}
 	err = xml.Unmarshal(body, rgws)
 	if err != nil {
 		return nil, err
 	}
 
-	if rgws.RgwConfiguration == nil  || len(rgws.RgwConfiguration) == 0 {
+	if rgws.RgwConfiguration == nil || len(rgws.RgwConfiguration) == 0 {
 		return nil, fmt.Errorf("RgwConfiguration is empty")
 	}
 	rgws.epoch = epoch
@@ -499,26 +495,23 @@ func (e *EndpointCollection) ParseEndpointFromRgwInfo(rgws *RgwInfo) (*SingleEnd
 	currentId := 0
 	for _, rgw := range rgws.RgwConfiguration {
 		if rgw.Ip == "" {
-			fmt.Println("Ip is empty")
 			continue
 		}
-		err := parseEndpointFromString(rgw.Ip + ":" + rgw.Port, &endpointAll[currentId])
+		err := parseEndpointFromString(rgw.Ip+":"+rgw.Port, &endpointAll[currentId])
 		if err != nil {
-			fmt.Println("failed parse endpoint:", err)
 			continue
 		}
 		head = insertEndpointToHead(&endpointAll[currentId], head)
-		currentId ++
+		currentId++
 	}
 	return head, currentId
 }
 
-func (e *EndpointCollection) UpdateEndpointsByEndpoint(endpoint *SingleEndpoint, 
-		forceUpdate bool) bool {
+func (e *EndpointCollection) UpdateEndpointsByEndpoint(endpoint *SingleEndpoint,
+	forceUpdate bool) bool {
 	// get the information of rgws from endpoint
 	rgws, err := e.getRgwInfoFromServer(endpoint)
 	if err != nil {
-		fmt.Println("UpdateEndpointByApi 1", err)
 		return false
 	}
 
@@ -526,21 +519,18 @@ func (e *EndpointCollection) UpdateEndpointsByEndpoint(endpoint *SingleEndpoint,
 	if !forceUpdate && rgws.epoch <= e.lastEpoch {
 		return true
 	}
-		
+
 	head, rgwNum := e.ParseEndpointFromRgwInfo(rgws)
 	if head == nil || rgwNum == 0 {
-		fmt.Println("UpdateEndpointByApi 2")
 		return false
 	}
 
 	if err := e.UpdateWholeEndpoitCollection(head, rgwNum, rgws.epoch); err == nil {
-		fmt.Println("UpdateEndpointByApi 3")
 		return true
 	}
 
 	return false
 }
-
 
 func (e *EndpointCollection) UpdateEndpointByApi() bool {
 	retry := e.numOfActiveEndpoint
@@ -551,7 +541,7 @@ func (e *EndpointCollection) UpdateEndpointByApi() bool {
 		if endpoint.IsInBlackList || endpoint.Id < e.validMinEndpointId {
 			continue
 		}
-		retry --
+		retry--
 
 		if ok := e.UpdateEndpointsByEndpoint(endpoint, false); ok {
 			return true
@@ -561,7 +551,6 @@ func (e *EndpointCollection) UpdateEndpointByApi() bool {
 }
 
 func (e *EndpointCollection) UpdateEndpointFromSeed() bool {
-	fmt.Println("probeEndpointFromSeed")
 	if e.endpointSeed == nil {
 		return false
 	}
@@ -593,28 +582,46 @@ func (e *EndpointCollection) KeepAlive() {
 		after = 0
 	}
 
+	immediately := false
 	for {
 		// sleep
-		if before > 0 {
-			time.Sleep(before * time.Second)
+		if before > 0 && !immediately {
+			select {
+			case <-e.notify:
+				immediately = true
+			case <-time.After(before * time.Second):
+			}
 		}
 
 		ok := e.UpdateEndpointByApi()
 		if !ok {
-			e.probeBlacklist()
+			ok = e.probeBlacklist()
 		}
 
 		if e.numOfActiveEndpoint == 0 {
 			// all endpoints have been added into blacklist and are invalid
-			ok := e.UpdateEndpointFromSeed()
+			ok = e.UpdateEndpointFromSeed()
 			if !ok {
-				e.probeEndpointFromSeed()
+				ok = e.probeEndpointFromSeed()
 			}
 		}
 
+		if immediately && ok {
+			immediately = false
+		} else if immediately {
+			// failed to fetch endpoint list from server
+			// retry immediately
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
 		// sleep
-		if after > 0 {
-			time.Sleep(after * time.Second)
+		if after > 0 && !immediately {
+			select {
+			case <-e.notify:
+				immediately = true
+			case <-time.After(after * time.Second):
+			}
 		}
 	}
 }
@@ -692,6 +699,5 @@ func insertEndpointToHead(endpoint *SingleEndpoint, head *SingleEndpoint) *Singl
 		temp.pre.next = endpoint
 		temp.pre = endpoint
 	}
-	fmt.Println("insert endpoint:", endpoint.URL)
 	return head
 }

@@ -144,7 +144,6 @@ func New(cfg aws.Config, clientInfo metadata.ClientInfo, handlers Handlers,
 		if endpoint == nil {
 			err = fmt.Errorf("New Request: failed get endpoint from Collection")
 		} else {
-			//fmt.Println("get endpoint for Reqeuest:", endpoint.URL, endpoint.Id)
 			httpReq.URL, err = url.Parse(endpoint.URL + operation.HTTPPath)
 		}
 	} else {
@@ -578,12 +577,10 @@ func (r *Request) prepareRetry() error {
 	// the request's body even though the Client's Do returned.
 	r.HTTPRequest = copyHTTPRequest(r.HTTPRequest, nil)
 	if aws.BoolValue(r.NetWorkErrorRetry) && r.NetworkRetryCount == 0 {
-		fmt.Println("before:", r.HTTPRequest.URL)
 		if err := updateURL(r.HTTPRequest.URL, r.Endpoint); err != nil {
 			return awserr.New(ErrCodeSerialization,
 				"failed to prepare url for retry", err)
 		}
-		fmt.Println("after:", r.HTTPRequest.URL)
 	}
 	r.ResetBody()
 	if err := r.Error; err != nil {

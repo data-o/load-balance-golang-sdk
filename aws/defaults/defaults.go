@@ -55,7 +55,7 @@ func Config() *aws.Config {
 	return aws.NewConfig().
 		WithCredentials(credentials.AnonymousCredentials).
 		WithRegion(os.Getenv("AWS_REGION")).
-		//WithHTTPClient(endpoints.NewHttpClient()).
+		WithHTTPClient(endpoints.NewHttpClient()).
 		WithMaxRetries(aws.UseServiceDefaultRetries).
 		WithMaxNetworkErrorRetries(aws.DefaultMaxNetworkErrorRetries).
 		WithKeepAliveInterval(endpoints.DefaultKeepAliveInterval).
