@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/client/metadata"
+	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/internal/sdkio"
 )
 
@@ -51,6 +52,8 @@ type Request struct {
 	Retryer
 	AttemptTime            time.Time
 	Time                   time.Time
+	Endpoint               *endpoints.SingleEndpoint
+	CEndpoint              *endpoints.EndpointCollection
 	Operation              *Operation
 	HTTPRequest            *http.Request
 	HTTPResponse           *http.Response
@@ -62,6 +65,8 @@ type Request struct {
 	Data                   interface{}
 	RequestID              string
 	RetryCount             int
+	NetworkRetryCount      int
+	NetWorkErrorRetry      *bool
 	Retryable              *bool
 	RetryDelay             time.Duration
 	NotHoist               bool
@@ -117,6 +122,11 @@ type Operation struct {
 func New(cfg aws.Config, clientInfo metadata.ClientInfo, handlers Handlers,
 	retryer Retryer, operation *Operation, params interface{}, data interface{}) *Request {
 
+	var (
+		endpoint *endpoints.SingleEndpoint
+	)
+
+
 	if retryer == nil {
 		retryer = noOpRetryer{}
 	}
@@ -129,7 +139,17 @@ func New(cfg aws.Config, clientInfo metadata.ClientInfo, handlers Handlers,
 	httpReq, _ := http.NewRequest(method, "", nil)
 
 	var err error
-	httpReq.URL, err = url.Parse(clientInfo.Endpoint + operation.HTTPPath)
+	if cfg.CEndpoint != nil {
+		endpoint = cfg.CEndpoint.GetNextEndpoint(nil)
+		if endpoint == nil {
+			err = fmt.Errorf("New Request: failed get endpoint from Collection")
+		} else {
+			//fmt.Println("get endpoint for Reqeuest:", endpoint.URL, endpoint.Id)
+			httpReq.URL, err = url.Parse(endpoint.URL + operation.HTTPPath)
+		}
+	} else {
+		httpReq.URL, err = url.Parse(clientInfo.Endpoint + operation.HTTPPath)
+	}
 	if err != nil {
 		httpReq.URL = &url.URL{}
 		err = awserr.New("InvalidEndpointURL", "invalid endpoint uri", err)
@@ -139,10 +159,11 @@ func New(cfg aws.Config, clientInfo metadata.ClientInfo, handlers Handlers,
 		Config:     cfg,
 		ClientInfo: clientInfo,
 		Handlers:   handlers.Copy(),
-
 		Retryer:     retryer,
 		Time:        time.Now(),
 		ExpireTime:  0,
+		Endpoint:    endpoint,
+		CEndpoint:   cfg.CEndpoint,
 		Operation:   operation,
 		HTTPRequest: httpReq,
 		Body:        nil,
@@ -531,9 +552,9 @@ func (r *Request) Send() error {
 		if err := r.sendRequest(); err == nil {
 			return nil
 		}
+
 		r.Handlers.Retry.Run(r)
 		r.Handlers.AfterRetry.Run(r)
-
 		if r.Error != nil || !aws.BoolValue(r.Retryable) {
 			return r.Error
 		}
@@ -545,6 +566,7 @@ func (r *Request) Send() error {
 	}
 }
 
+
 func (r *Request) prepareRetry() error {
 	if r.Config.LogLevel.Matches(aws.LogDebugWithRequestRetries) {
 		r.Config.Logger.Log(fmt.Sprintf("DEBUG: Retrying Request %s/%s, attempt %d",
@@ -555,6 +577,14 @@ func (r *Request) prepareRetry() error {
 	// and the HTTP Client's Transport may still be reading from
 	// the request's body even though the Client's Do returned.
 	r.HTTPRequest = copyHTTPRequest(r.HTTPRequest, nil)
+	if aws.BoolValue(r.NetWorkErrorRetry) && r.NetworkRetryCount == 0 {
+		fmt.Println("before:", r.HTTPRequest.URL)
+		if err := updateURL(r.HTTPRequest.URL, r.Endpoint); err != nil {
+			return awserr.New(ErrCodeSerialization,
+				"failed to prepare url for retry", err)
+		}
+		fmt.Println("after:", r.HTTPRequest.URL)
+	}
 	r.ResetBody()
 	if err := r.Error; err != nil {
 		return awserr.New(ErrCodeSerialization,
@@ -575,6 +605,7 @@ func (r *Request) sendRequest() (sendErr error) {
 	defer r.Handlers.CompleteAttempt.Run(r)
 
 	r.Retryable = nil
+	r.NetWorkErrorRetry = nil
 	r.Handlers.Send.Run(r)
 	if r.Error != nil {
 		debugLogReqError(r, "Send Request",
@@ -613,6 +644,16 @@ func (r *Request) copy() *Request {
 	op := *r.Operation
 	req.Operation = &op
 	return req
+}
+
+// Update the URL of Request
+func updateURL(u *url.URL, endpoint *endpoints.SingleEndpoint) (error) {
+	if endpoint == nil {
+		return fmt.Errorf("updateURL endpoint is nil")
+	}
+	u.Scheme = endpoint.Protocol
+	u.Host = endpoint.HostAndPort
+	return nil
 }
 
 // AddToUserAgent adds the string to the end of the request's current user agent.

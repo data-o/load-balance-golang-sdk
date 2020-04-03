@@ -13,6 +13,8 @@ import (
 // Config.MaxRetries is nil also.
 const UseServiceDefaultRetries = -1
 
+const DefaultMaxNetworkErrorRetries = 0
+
 // RequestRetryer is an alias for a type that implements the request.Retryer
 // interface.
 type RequestRetryer interface{}
@@ -48,6 +50,17 @@ type Config struct {
 	// Note: You must still provide a `Region` value when specifying an
 	// endpoint for a client.
 	Endpoint *string
+
+	// An optional file path
+	// this file provide the endpoints list
+	EndpointsPath *string
+
+	// The Endpoint collection
+	CEndpoint *endpoints.EndpointCollection
+
+	KeepAliveInterval *int
+
+	MaxNetworkErrorRetries *int
 
 	// The resolver to use for looking up endpoints for AWS service clients
 	// to use based on region.
@@ -303,6 +316,18 @@ func (c *Config) WithEndpoint(endpoint string) *Config {
 	return c
 }
 
+// WithKeepAliveInterval sets a config KeepAliveInterval value
+func (c *Config) WithKeepAliveInterval(duration int) *Config {
+	c.KeepAliveInterval = &duration
+	return c
+}
+
+// WithMaxNetworkErrorRetries sets a config
+func (c *Config) WithMaxNetworkErrorRetries(retries int) *Config {
+	c.MaxNetworkErrorRetries = &retries
+	return c
+}
+
 // WithEndpointResolver sets a config EndpointResolver value returning a
 // Config pointer for chaining.
 func (c *Config) WithEndpointResolver(resolver endpoints.Resolver) *Config {
@@ -471,8 +496,24 @@ func mergeInConfig(dst *Config, other *Config) {
 		dst.Credentials = other.Credentials
 	}
 
+	if other.EndpointsPath != nil {
+		dst.EndpointsPath = other.EndpointsPath
+	}
+
+	if other.CEndpoint != nil {
+		dst.CEndpoint = other.CEndpoint
+	}
+
 	if other.Endpoint != nil {
 		dst.Endpoint = other.Endpoint
+	}
+
+	if other.KeepAliveInterval != nil {
+		dst.KeepAliveInterval = other.KeepAliveInterval
+	}
+
+	if other.MaxNetworkErrorRetries != nil {
+		dst.MaxNetworkErrorRetries = other.MaxNetworkErrorRetries
 	}
 
 	if other.EndpointResolver != nil {

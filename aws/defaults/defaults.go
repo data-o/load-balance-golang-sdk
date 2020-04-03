@@ -10,7 +10,6 @@ package defaults
 import (
 	"fmt"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"time"
@@ -56,8 +55,10 @@ func Config() *aws.Config {
 	return aws.NewConfig().
 		WithCredentials(credentials.AnonymousCredentials).
 		WithRegion(os.Getenv("AWS_REGION")).
-		WithHTTPClient(http.DefaultClient).
+		//WithHTTPClient(endpoints.NewHttpClient()).
 		WithMaxRetries(aws.UseServiceDefaultRetries).
+		WithMaxNetworkErrorRetries(aws.DefaultMaxNetworkErrorRetries).
+		WithKeepAliveInterval(endpoints.DefaultKeepAliveInterval).
 		WithLogger(aws.NewDefaultLogger()).
 		WithLogLevel(aws.LogOff).
 		WithEndpointResolver(endpoints.DefaultResolver())

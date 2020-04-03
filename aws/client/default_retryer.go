@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/internal/sdkrand"
 )
@@ -99,6 +100,9 @@ func (d DefaultRetryer) RetryRules(r *request.Request) time.Duration {
 	}
 
 	retryCount := r.RetryCount
+	if aws.BoolValue(r.NetWorkErrorRetry) {
+		retryCount = r.NetworkRetryCount
+	}
 
 	// maxDelay the maximum retryer delay
 	maxDelay := d.MaxRetryDelay

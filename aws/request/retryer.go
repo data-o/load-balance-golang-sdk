@@ -225,6 +225,45 @@ func shouldRetryError(origErr error) bool {
 	}
 }
 
+// IsNetworkError returns whether the error is a network error.
+func IsNetworkError(origErr error) bool {
+	switch err := origErr.(type) {
+	case awserr.Error:
+		if err.Code() == CanceledErrorCode {
+			return false
+		}
+
+		origErr := err.OrigErr()
+		if origErr != nil {
+			return IsNetworkError(origErr)
+		}
+		return false
+
+	case *url.Error:
+		if strings.Contains(err.Error(), "connection refused") {
+			// Refused connections should be retried as the service may not yet
+			// be running on the port. Go TCP dial considers refused
+			// connections as not temporary.
+			return true
+		}
+		// *url.Error only implements Temporary after golang 1.6 but since
+		// url.Error only wraps the error:
+		return IsNetworkError(err.Err)
+
+	case temporary:
+		if netErr, ok := err.(*net.OpError); ok && netErr.Op == "dial" {
+			return true
+		}
+		// If the error is temporary, we want to allow continuation of the
+		// retry process
+		return err.Temporary() || isErrConnectionReset(origErr)
+	case nil:
+		return false
+	}
+
+	return false
+}
+
 // IsErrorThrottle returns whether the error is to be throttled based on its code.
 // Returns false if error is nil.
 func IsErrorThrottle(err error) bool {
@@ -306,4 +345,30 @@ func isErrCode(err error, codes []string) bool {
 // Alias for the utility function IsErrorExpiredCreds
 func (r *Request) IsErrorExpired() bool {
 	return IsErrorExpiredCreds(r.Error)
+}
+
+// If the the error is network error
+func (r *Request) ShouldNetworkErrorRetry() bool {
+	if r.Config.CEndpoint == nil {
+		r.NetWorkErrorRetry = aws.Bool(false)
+		return false
+	}
+	if isNetworkError := IsNetworkError(r.Error); !isNetworkError {
+		r.NetworkRetryCount = 0
+		r.NetWorkErrorRetry = aws.Bool(false)
+		return false
+	}
+	r.NetworkRetryCount += 1
+	if r.NetworkRetryCount >= aws.IntValue(r.Config.MaxNetworkErrorRetries) {
+		endpoint := r.CEndpoint.AddEndpointToBlacklist(r.Endpoint)
+		if endpoint != nil {
+			r.Endpoint = endpoint
+			r.NetworkRetryCount = 0
+			r.NetWorkErrorRetry = aws.Bool(true)
+		} else {
+			// careful, endpoint list is empty
+			return false
+		}
+	}
+	return true
 }

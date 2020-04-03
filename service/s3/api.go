@@ -17253,6 +17253,8 @@ type GetObjectInput struct {
 
 	// VersionId used to reference a specific version of the object.
 	VersionId *string `location:"querystring" locationName:"versionId" type:"string"`
+
+	ParmsProcess *string `location:"querystring" locationName:"x-bce-process" type:"string"`
 }
 
 // String returns the string representation

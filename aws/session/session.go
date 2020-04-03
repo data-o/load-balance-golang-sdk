@@ -638,20 +638,42 @@ func (s *Session) Copy(cfgs ...*aws.Config) *Session {
 // configure the service client instances. Passing the Session to the service
 // client's constructor (New) will use this method to configure the client.
 func (s *Session) ClientConfig(service string, cfgs ...*aws.Config) client.Config {
+	var (
+		coll *endpoints.EndpointCollection
+		err error
+	)
+	resolved := endpoints.ResolvedEndpoint{}
+	region := aws.StringValue(s.Config.Region)
+
 	s = s.Copy(cfgs...)
 
-	region := aws.StringValue(s.Config.Region)
-	resolved, err := s.resolveEndpoint(service, region, s.Config)
-	if err != nil {
-		s.Handlers.Validate.PushBack(func(r *request.Request) {
-			if len(r.ClientInfo.Endpoint) != 0 {
-				// Error occurred while resolving endpoint, but the request
-				// being invoked has had an endpoint specified after the client
-				// was created.
-				return
+	// find endpoints from GlobalEndpoints
+	if (s.Config.EndpointsPath != nil) {
+		endpointsPath := aws.StringValue(s.Config.EndpointsPath)
+		keepAliveInterval := aws.IntValue(s.Config.KeepAliveInterval)
+		if coll, err = endpoints.GEndpoints.FindEndpointCollection(
+				endpointsPath, keepAliveInterval); err == nil {
+			s.Config.CEndpoint = coll
+			endpoint := coll.GetNextEndpoint(nil)
+			if endpoint != nil {
+				resolved.URL = endpoint.URL
+				resolved.SigningRegion = region
 			}
-			r.Error = err
-		})
+		}
+	} else {
+		region := aws.StringValue(s.Config.Region)
+		resolved, err = s.resolveEndpoint(service, region, s.Config)
+		if err != nil {
+			s.Handlers.Validate.PushBack(func(r *request.Request) {
+				if len(r.ClientInfo.Endpoint) != 0 {
+					// Error occurred while resolving endpoint, but the request
+					// being invoked has had an endpoint specified after the client
+					// was created.
+					return
+				}
+				r.Error = err
+			})
+		}
 	}
 
 	return client.Config{
