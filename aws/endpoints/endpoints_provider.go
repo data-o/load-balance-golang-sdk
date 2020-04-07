@@ -102,6 +102,11 @@ func NewEndpointCollection(endpointsPath string, keepAliveInterval int) (
 	if endpointsPath == "" {
 		return nil, fmt.Errorf("endpoint path is empty")
 	}
+
+	if keepAliveInterval < 0 {
+		return nil, fmt.Errorf("keepAliveInterval must be equal or greater than 0")
+	}
+
 	httpClient := NewHttpClient()
 	endpoints := &EndpointCollection{
 		lastEpoch:         -1,
@@ -212,7 +217,7 @@ func (e *EndpointCollection) isInActiveEndpoints(endpoint *SingleEndpoint) bool 
 	}
 
 	head := e.endpointHead.next
-	for head != endpoint {
+	for head != e.endpointHead {
 		if head.URL == endpoint.URL {
 			return true
 		}
@@ -253,7 +258,10 @@ func (e *EndpointCollection) AddEndpointToBlacklist(endpoint *SingleEndpoint) *S
 		return e.GetRandEndpoint(0)
 	}
 
-	e.numOfActiveEndpoint--
+	if endpoint.Id >= e.validMinEndpointId && e.isInActiveEndpoints(endpoint) {
+		e.numOfActiveEndpoint--
+	}
+
 	if e.numOfActiveEndpoint <= 0 {
 		e.numOfActiveEndpoint = 0
 		e.endpointHead = nil
@@ -310,7 +318,7 @@ func (e *EndpointCollection) GetNextEndpoint(endpoint *SingleEndpoint) *SingleEn
 
 	// get next valid endpoint
 	temp := endpoint.next
-	for temp != nil {
+	for temp != nil && temp != endpoint {
 		if temp.Id < e.validMinEndpointId || temp.IsInBlackList {
 			temp = temp.next
 		} else {

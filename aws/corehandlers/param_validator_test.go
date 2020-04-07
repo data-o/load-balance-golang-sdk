@@ -11,8 +11,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/client/metadata"
 	"github.com/aws/aws-sdk-go/aws/corehandlers"
 	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/awstesting/unit"
-	"github.com/aws/aws-sdk-go/service/kinesis"
 )
 
 var testSvc = func() *client.Client {
@@ -258,29 +256,6 @@ func TestValidateFieldMinParameter(t *testing.T) {
 
 		if e, a := c.err, req.Error; !reflect.DeepEqual(e, a) {
 			t.Errorf("%d, expect %v, got %v", i, e, a)
-		}
-	}
-}
-
-func BenchmarkValidateAny(b *testing.B) {
-	input := &kinesis.PutRecordsInput{
-		StreamName: aws.String("stream"),
-	}
-	for i := 0; i < 100; i++ {
-		record := &kinesis.PutRecordsRequestEntry{
-			Data:         make([]byte, 10000),
-			PartitionKey: aws.String("partition"),
-		}
-		input.Records = append(input.Records, record)
-	}
-
-	req, _ := kinesis.New(unit.Session).PutRecordsRequest(input)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		corehandlers.ValidateParametersHandler.Fn(req)
-		if err := req.Error; err != nil {
-			b.Fatalf("validation failed: %v", err)
 		}
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/corehandlers"
 	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/awstesting"
 	"github.com/aws/aws-sdk-go/awstesting/unit"
@@ -201,6 +202,32 @@ func TestSendWithContextCanceled(t *testing.T) {
 
 	if e, a := request.CanceledErrorCode, aerr.Code(); e != a {
 		t.Errorf("expect %q, error code got %q", e, a)
+	}
+}
+func TestAfterRetryWithNetworkError(t *testing.T) {
+	c := awstesting.NewClient()
+
+	req := c.NewRequest(&request.Operation{Name: "Operation"}, nil, nil)
+
+	ctx := &awstesting.FakeContext{DoneCh: make(chan struct{})}
+	req.SetContext(ctx)
+
+	req.Error = &url.Error{
+		URL: "http://127.0.0.1:8080",
+		Err: fmt.Errorf("connection refused"),
+	}
+	req.Config.MaxNetworkErrorRetries = aws.Int(3)
+	req.Config.CEndpoint = &endpoints.EndpointCollection{}
+	req.Retryable = aws.Bool(true)
+	req.HTTPResponse = nil
+
+	corehandlers.AfterRetryHandler.Fn(req)
+
+	if req.Error != nil {
+		t.Fatalf("expect no error, got %v", req.Error)
+	}
+	if e, a := 1, req.NetworkRetryCount; e != a {
+		t.Errorf("expect NetworkRetryCount count to be %d, got %d", e, a)
 	}
 }
 

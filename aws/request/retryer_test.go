@@ -3,6 +3,7 @@ package request
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -113,5 +114,45 @@ func TestRequest_NilRetyer(t *testing.T) {
 
 	if e, a := 0, req.MaxRetries(); e != a {
 		t.Errorf("expect no retries, got %v", a)
+	}
+}
+func TestIsNetWorkError(t *testing.T) {
+	netErr := &url.Error{
+		URL: "http://127.0.0.1:8080",
+		Err: fmt.Errorf("connection refused"),
+	}
+
+	cases := []struct {
+		Err          error
+		networkError bool
+	}{
+		{
+			Err:          fmt.Errorf("error"),
+			networkError: false,
+		},
+		{
+			Err:          awserr.New(CanceledErrorCode, "temporary error", mockTempError(false)),
+			networkError: false,
+		},
+		{
+			Err:          awserr.New(ErrCodeRequestError, "temporary error", mockTempError(false)),
+			networkError: false,
+		},
+		{
+			Err:          nil,
+			networkError: false,
+		},
+	}
+
+	for i, c := range cases {
+		networkError := IsNetworkError(c.Err)
+		if networkError != c.networkError {
+			t.Errorf("%d, expect %t temporary error, got %t", i, c.networkError, networkError)
+		}
+	}
+
+	networkError := IsNetworkError(netErr)
+	if !networkError {
+		t.Errorf("expect true temporary error, got %t", networkError)
 	}
 }

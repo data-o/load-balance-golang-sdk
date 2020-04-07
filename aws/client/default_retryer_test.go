@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/request"
 )
 
@@ -196,4 +197,12 @@ func TestRetryDelay(t *testing.T) {
 		t.Errorf("retry delay should not be less than retry-after duration, received %s for retrycount %d", a, 1)
 	}
 
+	rTemp1 := r
+	rTemp1.RetryCount = 4
+	rTemp1.NetworkRetryCount = 1
+	rTemp1.NetWorkErrorRetry = aws.Bool(true)
+	rTemp1.HTTPResponse = &http.Response{StatusCode: 503, Header: http.Header{"Retry-After": []string{"300"}}}
+	if a < 5*time.Minute {
+		t.Errorf("retry delay should not be less than retry-after duration, received %s for retrycount %d", a, 1)
+	}
 }

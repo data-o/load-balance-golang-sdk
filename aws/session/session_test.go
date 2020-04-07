@@ -5,7 +5,6 @@ package session
 import (
 	"bytes"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,9 +25,6 @@ func TestNewDefaultSession(t *testing.T) {
 	s := New(&aws.Config{Region: aws.String("region")})
 
 	if e, a := "region", *s.Config.Region; e != a {
-		t.Errorf("expect %v, got %v", e, a)
-	}
-	if e, a := http.DefaultClient, s.Config.HTTPClient; e != a {
 		t.Errorf("expect %v, got %v", e, a)
 	}
 	if s.Config.Logger == nil {
@@ -151,6 +147,21 @@ func TestSessionClientConfig(t *testing.T) {
 	if e, a := "other-region", *cfg.Config.Region; e != a {
 		t.Errorf("expect %v, got %v", e, a)
 	}
+
+	// write endpoints
+	endpointPath := "./session_test_endpoints_path123"
+	fd, err := os.Create(endpointPath)
+	if err != nil {
+		t.Errorf("failed write to endpoint path %s", endpointPath)
+	}
+	fd.WriteString("http://abc.efg:8080")
+	fd.Close()
+	s.Config.EndpointsPath = aws.String(endpointPath)
+	cfg = s.ClientConfig("mock-service", &aws.Config{Region: aws.String("other-region")})
+	if cfg.Endpoint != "http://abc.efg:8080" {
+		t.Errorf("expect %s, got %s", "http://abc.efg:8080", cfg.Endpoint)
+	}
+	os.Remove(endpointPath)
 }
 
 func TestNewSession_ResolveEndpointError(t *testing.T) {
