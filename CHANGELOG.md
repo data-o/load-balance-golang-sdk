@@ -1,3 +1,13 @@
+Release v1.28.13-l0.1 (2020-04-07)
+===
+
+### SDK Features
+* remove all serveices except the s3
+* support load balance and keep endpoints alive
+
+### SDK Bugs
+* we need to probe endpoints immediately when all endpoints are added into blacklist
+
 Release v1.28.13 (2020-02-07)
 ===
 
